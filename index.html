@@ -1,0 +1,40 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" 
+                       "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<link rel="stylesheet" type="text/css" href="../sitewide.css">
+<title>The Fungus Virtual Machine</title>
+</head>
+
+<body>
+<h1>The Fungus Virtual Machine</h1>
+
+<p> Several years ago, <a class="offsite"
+href="http://www.bedroomlan.org/~alexios/coding.html#befunge">Alexios 
+Chouchoulas</a> wrote a paper describing <b>Fungus, a physical machine 
+especially designed for the Funge programming paradigm.</b> I have a 
+software implementation of that specification, with some useful 
+extensions; and also a two-dimensional assembler for creating binary 
+programs to run on the virtual machine.
+
+<ul>
+  <li>Read Chouchoulas' <a href="docs/fungus.pdf">original Fungus 
+specification</a> <small>[PDF, 170K]</small>.</li>
+  <li>Read my <a href="fungus.html">Fungus virtual machine
+documentation</a>.</li>
+  <li>Browse a <a href="src">snapshot of the current sources</a>
+for the Fungus virtual machine and assembler. The accompanying Makefile
+builds the following programs: 
+    <ul>
+      <li><tt>fungasm</tt>, the Fungus assembler. </li>
+      <li><tt>simfunge</tt>, the Fungus simulator. </li>
+      <li><tt>bef2elf</tt>, a utility program that converts arbitrary 
+ASCII text blocks into FungELF program images. </li>
+      <li><tt>elf2ppm</tt>, a utility program that converts arbitrary 
+FungELF images into 512x512 bitmap images for browsing and debugging.
+    </ul>
+  </li>
+</ul>
+
+</body>
+</html>
