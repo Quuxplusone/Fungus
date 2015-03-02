@@ -1,0 +1,33 @@
+
+#define OPEQ(op) op##=
+
+uint18 & uint18::operator OPEQ(OP) (const uint18 & ui)
+{
+    unsigned int x = (this->value & 0777) OP (ui.value & 0777);
+    unsigned int y = (this->value & 0777000) OP (ui.value & 0777000);
+    x &= 0777;
+    y &= 0777000;
+    switch (currentMode) {
+        case MaskVector:
+            this->value = y | x;
+            break;
+        case MaskX:
+            this->value = (this->value & 0777000) | x;
+            break;
+        case MaskY:
+            this->value = y | (this->value & 0777);
+            break;
+        case MaskScalar:
+            this->value = (this->value OP ui.value) & 0777777;
+            break;
+    }
+    return *this;
+}
+
+uint18 operator OP (uint18 a, const uint18 & b)
+{
+    a OPEQ(OP) b;
+    return a;
+}
+
+#undef OPEQ

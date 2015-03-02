@@ -1,0 +1,7 @@
+
+#define OPEQ(op) op##=
+
+    uint18 & operator OPEQ(OP) (const uint18 & x);
+    uint18 operator OP (const uint18 & x);
+
+#undef OPEQ

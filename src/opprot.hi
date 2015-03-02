@@ -1,0 +1,7 @@
+
+#ifndef OP
+ #error "Oh no!"
+#endif
+
+uint18 operator OP (uint18 a, const uint18 & b);
+

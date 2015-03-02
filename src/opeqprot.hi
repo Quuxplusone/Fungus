@@ -1,0 +1,12 @@
+
+#ifndef OP
+ #error "Oh no!"
+#endif
+
+#define OPEQ(op) OPEQ_(op)
+#define OPEQ_(op) op##=
+
+    uint18 & operator OPEQ(OP) (const uint18 & x);
+
+#undef OPEQ
+#undef OPEQ_
