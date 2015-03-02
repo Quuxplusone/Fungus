@@ -2,39 +2,668 @@
                        "http://www.w3.org/TR/html4/loose.dtd">
 <html>
 <head>
-<link rel="stylesheet" type="text/css" href="../sitewide.css">
-<title>The Fungus Virtual Machine</title>
+<title>An implementation of Alexios Chouchoulas' Fungus, the Funge Machine</title>
 </head>
 
 <body>
-<h1>The Fungus Virtual Machine</h1>
 
-<p> Several years ago, <a class="offsite"
-href="http://www.bedroomlan.org/~alexios/coding.html#befunge">Alexios 
-Chouchoulas</a> wrote a paper describing <b>Fungus, a physical machine 
-especially designed for the Funge programming paradigm.</b> I have a 
-software implementation of that specification, with some useful 
-extensions; and also a two-dimensional assembler for creating binary 
-programs to run on the virtual machine.
+<h1>Fungus: the Funge Machine</h1>
 
-<ul>
-  <li>Read Chouchoulas' <a href="docs/fungus.pdf">original Fungus 
-specification</a> <small>[PDF, 170K]</small>.</li>
-  <li>Read my <a href="fungus.html">Fungus virtual machine
-documentation</a>.</li>
-  <li>Browse a <a href="src">snapshot of the current sources</a>
-for the Fungus virtual machine and assembler. The accompanying Makefile
-builds the following programs: 
-    <ul>
-      <li><tt>fungasm</tt>, the Fungus assembler. </li>
-      <li><tt>simfunge</tt>, the Fungus simulator. </li>
-      <li><tt>bef2elf</tt>, a utility program that converts arbitrary 
-ASCII text blocks into FungELF program images. </li>
-      <li><tt>elf2ppm</tt>, a utility program that converts arbitrary 
-FungELF images into 512x512 bitmap images for browsing and debugging.
-    </ul>
-  </li>
-</ul>
+<h2 id="ToC">Table of Contents</h2>
+<ol>
+  <li> <a href="#Intro">Introduction: What is Fungus?</a> </li>
+  <li> <a href="#Typos">Errata to Chouchoulas' specification</a> </li>
+  <ol>
+    <li> <a href="#RET">The <i>RET</i> instruction</a> </li>
+    <li> <a href="#Group0">The Group&nbsp;0 instructions</a> </li>
+    <li> <a href="#DZ">The <i>DZ</i> and <i>DNZ</i> instructions</a> </li>
+    <li> <a href="#Endianness">Endianness</a> </li>
+    <li> <a href="#Aliases">Pre-defined aliases</a> </li>
+  </ol>
+  <li> <a href="#MSRs">Machine-specific registers</a> </li>
+  <ol>
+    <li> <a href="#HCON">Hardware contexts: HCON, HCAND, and HCOR</a> </li>
+    <li> <a href="#OSEC">Instruction-level security: OSEC</a> </li>
+    <li> <a href="#IRET">Asynchronous interrupts: ISTACK, DISTK, and IRET</a> </li>
+    <li> <a href="#TICKS">Cycle counter: TICKS</a> </li>
+    <li> <a href="#INPUT">Simulator I/O: INPUT, OUTPUT, and PRGMEXIT</a> </li>
+  </ol>
+  <li> <a href="#FungELF">The FungELF file format</a> </li>
+  <li> <a href="#fungasm">The Fungus assembler</a> </li>
+  <ol>
+    <li> <a href="#kernel">The Befunge-93 kernel</a> </li>
+  </ol>
+</ol>
+
+
+<h2 id="Intro">What is Fungus?</h2>
+
+<p> Fungus is "an architecture designed and optimised for Funge", according to
+Alexios Chouchoulas, who wrote a very clever paper on it, back in 2001. I read
+that paper several years ago, and in 2007, having some low-level systems experience
+under my belt, I decided to go ahead and implement a simulator and full suite of
+tools for the Fungus virtual machine.
+
+<p> Fungus, like Befunge, is a near-total departure from the one-dimensional world
+of traditional processor architecture. Its program counter (PC) moves in two
+dimensions, according to a two-dimensional "delta", in exactly the same way that
+the Befunge "IP" moves through two-dimensional Funge-space. To complement its
+forward-looking dimensionality, Fungus also adds some retro styling, in the form
+of 18-bit vector registers and memory words. (Fungus has a RISC instruction set,
+in which each instruction occupies exactly one 18-bit word. It could hardly be
+otherwise, if each instruction is to keep a consistent meaning no matter from
+which direction the PC encounters it!)
+
+<p> Possibly the cleverest aspect of Fungus, however, is its approach to ASCII. 
+The "zero" opcode is interpreted as <i>TRP</i>, "trap", which invokes a kernel
+call corresponding to its 9-bit operand. (The Fungus specification never mentions
+the kernel by name, but the code in low RAM is essentially a kernel, no matter
+what you call it.) This means that any 18-bit word whose top 10 bits are all zero
+&mdash; i.e., any 7- or 8-bit ASCII character &mdash; invokes the kernel.
+Therefore, it is perfectly possible to write a Befunge-interpreter kernel,
+such that loading an ASCII Befunge program into high RAM and sending the PC
+there would actually run the Befunge program!
+
+<p> At this Web site, you can download a mirrored copy of Alexios Chouchoulas'
+original PDF specification, as well as my Fungus tools: a virtual machine, an
+assembler (producing bastardized ELF executables), a disassembler, a selection
+of demo programs, and the above-mentioned Befunge kernel (in the ELF format
+recognized by the virtual machine).
+
+
+<h2 id="Typos">Errata to Chouchoulas' specification</h2>
+
+
+<h3 id="RET">The RET instruction</h3>
+
+<p> Chouchoulas' Fungus specification contains a typo: the <i>RET</i> instruction
+is given in the body text as <tt>0XX&nbsp;001&nbsp;XXX&nbsp;XXXXXXXXX<sub>2</sub></tt>
+(colliding with the <i>LI</i> instruction). However, it's given correctly as
+opcode&nbsp;<tt>111<sub>2</sub></tt> in Table&nbsp;1 of the same document. My Fungus
+virtual machine implements <i>RET</i> as <tt>111<sub>2</sub></tt> consistently,
+ignoring the apparent typo in the spec.
+
+<h3 id="Group0">The Group&nbsp;0 instructions</h3>
+
+<p> Chouchoulas' Fungus specification contradicts itself on the encoding of the
+branching instructions <i>SZ</i>, <i>SNZ</i>, <i>DZ</i>, and <i>DNZ</i>. In the
+body text, the tested register is specified as being encoded in the <i>A</i> field
+of the instruction; but in Table&nbsp;1, the tested register is encoded in the
+<i>X</i> field, leaving the entire <i>rd</i> of the instruction word as "don't care"
+bits. The latter encoding makes more sense. (It lets the <i>rd</i> be used for
+data storage, and makes all of the Group&nbsp;0 instructions use <i>X</i> instead
+of some instructions' using <i>A</i> and some <i>X</i>.) Therefore, my Fungus
+virtual machine implements Table&nbsp;1's more sensible encoding.
+
+<h3 id="DZ">The DZ and DNZ instructions</h3>
+
+<p> Chouchoulas' Fungus specification is full of mistakes and unclear passages
+regarding the <i>DZ</i> and <i>DNZ</i> instructions. For example, he describes
+them as setting &Delta;PC to (&minus;1,&minus;1) or (1,1), and then describes
+those directions as "northeast" and "southwest". However, (&minus;1,&minus;1)
+is really "northwest", and (1,1) is really "southeast". This can be inferred
+from the normal meanings of those words in Befunge, and also from the description
+of the <i>TRP</i> instruction on page&nbsp;11, where Chouchoulas states that
+going "north" from row&nbsp;0 takes the PC to row&nbsp;777.
+
+<p> The spec is also extremely unclear on the effect of the current masking mode
+on <i>DZ</i> and <i>DNZ</i> &mdash; the masking mode certainly affects the setting
+of &Delta;PC, but does it also affect the part of <i>A</i> that is tested against
+zero? and does <tt>DZ.X</tt> set &Delta;PC<sub>y</sub> to zero, or leave it unchanged?
+Table&nbsp;1 seems to use the underbar to indicate the parts of an instruction
+affected by the current masking mode, but the precise meaning of the underbar
+seems to differ between <i>LV</i> and <i>DZ</i>.
+
+<p> My Fungus virtual machine simulates the instruction <tt>DZ&nbsp;$X</tt> as follows
+below. The operation of <i>DNZ</i> is exactly the same, except that it replaces the
+words "was zero", below, with "wasn't zero".
+
+<ol>
+  <li> Store the value (0,0) in &Delta;PC, ignoring the masking mode. &Delta;PC is now zero. </li>
+  <li> Store the value (&minus;1,&minus;1) in &Delta;PC, according to the masking mode. &Delta;PC is now one of (&minus;1,&minus;1), (&minus;1,0), or (0,&minus;1). </li>
+  <li> Compare the value of <tt>$X</tt> to zero, ignoring the masking mode. </li>
+  <li> If <tt>$X</tt> was zero, then store the value (1,1) in &Delta;PC, according to the masking mode. &Delta;PC is now one of (1,1), (1,0), or (0,1). </li>
+</ol>
+
+<p> Pay special attention to the semantics of <i>DZ</i> and <i>DNZ</i> when applied
+to the &Delta;PC register itself! <tt>DNZ $2</tt> always diverts, and
+<tt>DZ&nbsp;$2</tt> never diverts.
+
+
+<h3 id="Endianness">Endianness</h3>
+
+<p> Chouchoulas' specification dictates that in an 18-bit word written as a vector,
+the <i>y</i>&nbsp;ordinate (the <i>wo</i>, or the most significant half-word) is written
+after the <i>x</i>&nbsp;ordinate, like so: (<i>x</i>,<i>y</i>).
+
+<p> However, the <i>y</i> ordinate is also the most significant half-word when using
+with a register's contents as an 18-bit integer value; thus the vector
+(000,777)<sub>8</sub> is equivalent to the 18-bit unsigned integer 777000<sub>8</sub>.
+
+<p> Chouchoulas' descriptions of the <i>INC</i> and <i>DEC</i> instructions are
+therefore incorrect; <i>INC</i> actually adds the vector&nbsp;(1,0), and <i>DEC</i>
+adds (&minus;1,0). Other sections of the specification may be wrong as well. In
+this documentation, and of course in the virtual machine itself, I have tried to
+stick to the official convention of writing (<i>x</i>,<i>y</i>)-endian vectors and
+<i>wo</i>-endian integers.
+
+
+<h3 id="Aliases">Pre-defined aliases</h3>
+
+<p> The <tt>fungasm</tt> Fungus assembler provides the following pre-defined aliases
+for useful individual assembly instructions. The <i>GON</i>, <i>GOS</i>, <i>GOE</i>, <i>GOW</i>, <i>JR</i>, and <i>SHL</i> mnemonics were suggested by Chouchoulas; the
+particular opcode chosen for <i>NOP</i> is based on a footnote in Chouchoulas' paper.
+
+<p> In the table, the notation <tt>.m</tt> means that the alias takes an optional
+masking mode. In the interest of clarity and simplicity, some aliases do not
+accept masking-mode suffixes.
+
+<p>
+<table>
+<tr><td><b>GON &mdash; Go North</b></td><td><tt>DZ.Y $0</tt></td></tr>
+<tr><td><b>GOS &mdash; Go South</b></td><td><tt>DNZ.Y $0</tt></td></tr>
+<tr><td><b>GOW &mdash; Go West</b></td><td><tt>LI $2, -1</tt></td></tr>
+<tr><td><b>GOE &mdash; Go East</b></td><td><tt>LI $2, 1</tt></td></tr>
+<tr><td><b>GONW &mdash; Go Northwest</b></td><td><tt>LV $2, -1</tt></td></tr>
+<tr><td><b>GOSE &mdash; Go Southeast</b></td><td><tt>LV $2, 1</tt></td></tr>
+<tr><td><b>GOB &mdash; Go Back</b></td><td><tt>SUB $2, $0, $2</tt></td></tr>
+<tr><td><b>JR A &mdash; Jump to Register</b></td><td><tt>ADD $1, $0, $A</tt></td></tr>
+<tr><td><b>MR.m A, B &mdash; Move Register</b></td><td><tt>ADD.m $A, $0, $B</tt></td></tr>
+<tr><td><b>NEG.m A, B &mdash; Negate</b></td><td><tt>SUB.m $A, $0, $B</tt></td></tr>
+<tr><td><b>NOP &mdash; No Operation</b></td><td><tt>INC.Y $7, $7</tt></td></tr>
+<tr><td><b>SHL.m A, B &mdash; Shift Left</b></td><td><tt>ADD.m $A, $B, $B</tt></td></tr>
+<tr><td><b>IRET &mdash; Interrupt Return</b></td><td><tt>SMR $0, #IRET</tt></td></tr>
+</table>
+
+<p> Notice that there are no aliases <i>GOSW</i> or <i>GONE</i>, because those
+operations cannot be represented in a single Fungus instruction. (The instruction
+set would have been more useful if the <i>DZ</i> and <i>DNZ</i> instructions were
+defined to load the vectors (1,&minus;1) and (&minus;1,1) instead of (1,1) and
+(&minus;1,&minus;1), since the latter constants can already be loaded in fewer
+cycles with <i>LV</i>, as shown above.)
+
+<p> As mentioned in the specification, <tt>INC.Y</tt> adds the <i>y</i>&nbsp;component
+of the vector (1,0) to the <i>y</i>&nbsp;component of the given register; thus, it
+adds zero, producing no effect.
+
+
+<div align="right"><a href="fscheme.png"><img src="fscheme.png" width=269 height=302
+vspace=16 hspace=16 align="right"
+alt="The Fungus Virtual Machine: a diagram after Knuth's style"></a></div>
+
+<h2 id="MSRs">Machine-specific registers</h2>
+
+<p> I borrowed the idea of machine-specific registers, or <i>MSRs</i>, from Intel's
+x86 architecture. MSRs provide a way for the hardware designer to extend the
+capabilities of the hardware in ways the original designer didn't anticipate. They
+are a mixed blessing, since two different "Fungus" machines could end up supporting
+vastly different, and even incompatible, semantics. And I didn't enjoy hacking up
+Chouchoulas' elegant design. But Fungus, as it stood, <i>needed</i> more functionality,
+and MSRs were the cleanest way to provide it. 
+
+<p> Therefore, my Fungus virtual machine adds two new instructions to the instruction set:
+
+<p>
+<table>
+<tr><td colspan="2"><b>LMR &mdash; Load Machine Register</b></td>
+    <td colspan="2"><b>SMR &mdash; Store Machine Register</b></td></tr>
+<tr><td><b>Instruction</b></td><td><b>LMR x, r</b></td>
+    <td><b>Instruction</b></td><td><b>SMR x, r</b></td></tr>
+<tr><td><b>Format</b></td><td><tt>1mm 111 xxx 000 rrrrrr</tt></td>
+    <td><b>Format</b></td><td><tt>1mm 111 xxx 001 rrrrrr</tt></td></tr>
+<tr><td><b>Semantics</b></td><td><i>X</i> <tt>:=</tt> MSR(R)</td>
+    <td><b>Semantics</b></td><td>MSR(R) <tt>:=</tt> <i>X</i></td>
+<tr><td><b>Cycles</b></td><td>5</td>
+    <td><b>Cycles</b></td><td>5</td></tr>
+</table>
+
+<p> The <i>LMR</i> instruction reads a value from the specified MSR and stores it in
+the specified register. The write into <i>X</i> is affected by masking modes
+X&nbsp;and&nbsp;Y; <tt>LMR.X</tt> writes only the rd of the specified register, and
+<tt>LMR.Y</tt> writes only the wo.
+
+<p> The <i>SMR</i> instruction writes the value of register <i>X</i> into the
+specified MSR. The write may be affected by masking modes X&nbsp;and&nbsp;Y;
+conceptually, <tt>SMR.X</tt> writes only the rd of the specified register, and
+<tt>SMR.Y</tt> writes only the wo. However, it is possible for a MSR to be read-only,
+or writeable only in vector or scalar mode; that's up to the hardware or machine
+simulator.
+
+<p> Since the <i>R</i> field is 6&nbsp;bits wide, there are 64&nbsp;unique MSR
+numbers. However, some MSRs might be read-only, and others write-only; for example,
+a virtual machine implementation could arrange for reading from MSR&nbsp;#001 to
+perform keyboard input, while writing to MSR&nbsp;#001 would perform console output.
+MSR callback functions have access to the entire state of the virtual machine, so a
+single MSR could provide practically unlimited services. (For example, "writing" a
+single MSR could trigger a service that would read a series of words from memory and
+dispatch on their values. However, that kind of service seems to me antithetical to
+the simplicity and hardwariness of Fungus.)
+
+<blockquote>
+<p> To make it easier for the programmer when dealing with machines with different
+capabilities, this specification mandates that reading the value of an unimplemented
+machine register (i.e., one to which no other semantics have been attached) should
+always return zero, and writing to an unimplemented machine register should always
+have no effect.
+</blockquote>
+
+<p> My Fungus virtual machine provides hooks for the front-end to add machine-specific
+registers with whatever semantics it likes. Several MSRs are implemented by my virtual
+machine by default, and they are the subjects of the following subsections.
+
+<p> In general, I have organized the MSRs into the two categories "critical" and
+"non-critical"; or equivalently, "hardware-targeted" and "simulator-targeted". The
+"critical" MSRs all have numbers in the range 40<sub>8</sub> to 77<sub>8</sub>, and
+implement critical hardware functionality such as operating-system security and
+asynchronous interrupts. The "non-critical" MSRs have numbers in the range
+00<sub>8</sub> to 37<sub>8</sub>, and provide helpful things like console I/O
+that you wouldn't expect to find on a real hardware platform.
+
+
+<h3 id="INPUT">Simulator I/O</h3>
+
+<p> The first two "non-critical" machine-specific registers are INPUT
+(MSR&nbsp;#00<sub>8</sub>) and OUTPUT (MSR&nbsp;#01<sub>8</sub>). These provide
+a fairly high-level I/O interface, reading and writing ASCII characters on the
+simulator's <tt>stdin</tt> and <tt>stdout</tt>.
+
+<p> A real hardware implementation would probably have an input system that generated
+an <a href="#IRET">asynchronous interrupt</a> whenever a key on the keyboard was
+pressed, and then the kernel would be responsible for bookkeeping tasks such as
+maintaining the state of the Shift and Caps&nbsp;Lock keys and keeping a buffer
+of unread input characters. But that would be really complicated, so in the
+interest of keeping the simulator accessible, I've given it the INPUT register.
+
+<p> Reading from INPUT stores a nine-bit ASCII character in the destination register.
+In masking mode X, only the <i>rd</i> is written; in masking mode Y, only the
+<i>wo</i> is written; in vector mode, both half-words are given a copy of the
+input character; and in scalar mode, the <i>rd</i> is sign-extended into the
+<i>wo</i>. Reading from a stream that is at end-of-file results in a value of
+&minus;1 (777<sub>8</sub>). Writing to INPUT has no effect.
+
+<p> A real hardware implementation's output mechanism would depend entirely on
+what kind of output device was hooked up to the machine. If the device were a
+computer monitor, then part of low RAM would probably be set aside as a "video
+memory area". The monitor would read data from this array and plot characters
+or pixels on the screen according to their values. But that would be really
+complicated, so in the interest of keeping the simulator accessible, I've given
+it the OUTPUT register.
+
+<p> Writing to OUTPUT prints one or two ASCII characters to <tt>stdout</tt>.
+In masking mode X, only the <i>rd</i> is printed; in masking mode Y, only the
+<i>wo</i> is printed; in vector mode, first the <i>wo</i> is printed and then
+the <i>rd</i>; and in scalar mode, the behavior is undefined. All characters
+are ANDed with 255<sub>10</sub> before being printed, so printing 745<sub>8</sub>
+is equivalent to printing 345<sub>8</sub>. Reading from OUTPUT has no effect.
+
+<p> Finally, the simulator provides a way to halt the program. Writing any
+value, in any mode, to the machine-specific register PRGMEXIT
+(MSR&nbsp;#02<sub>8</sub>) ends the program. The value written is used as the
+simulator's return code to your real operating system, so
+<tt>SMR&nbsp;$0,&nbsp;#PRGMEXIT</tt> is the equivalent of <tt>return&nbsp;0;</tt>
+in C or&nbsp;C++.
+
+
+<h3 id="HCON">Hardware contexts</h3>
+
+<p> The Fungus specification claims that one of the design aims of Fungus was to support
+"hardware contexts", so that programs could run in small sandboxes of the address space,
+wrapping at the edges of those boxes, "thus forming a sub-torus of the super-torus that
+is Fungus' main memory." I'm not sure what Chouchoulas meant, but I have implemented a
+similar concept myself.
+<p> My Fungus virtual machine fells two rds with one stone &mdash; its implementation
+ of what I choose to call "hardware contexts" in the same stroke gives us a distinction
+ between "supervisor mode", in which all of memory is accessible; and "user mode", in
+ which the PC is restricted to a sandbox as described in the preceding paragraph.
+
+<p> The virtual machine's implementation uses three <i>machine-specific registers</i>,
+named HCON, HCAND, and HCOR. (Their MSR numbers are #040<sub>8</sub>, #041<sub>8</sub>,
+and #042<sub>8</sub>.) The HCON register is a read-only register; it cannot be changed
+by the <i>SMR</i> instruction. Instead, it is set to zero whenever a <i>TRP</i> occurs,
+and it is set to&nbsp;1 whenever a <i>RET</i> occurs. (This happens in addition to their
+usual semantics of saving and restoring PC and &Delta;PC.) The HCAND and HCOR registers
+are writeable only when HCON is non-zero; if HCON is zero, then <tt>SMR&nbsp;$0,HCAND</tt>
+has no effect. However, HCAND and HCOR are always readable with <i>LMR</i>.
+
+<p> When HCON is zero, the machine behaves exactly as described in the Fungus spec.
+We say that the processor is in <i>kernel mode</i>.
+
+<p> When HCON is non-zero (i.e., 1), all address calculations are changed. Instead
+of doing anything with a raw memory address <i>A</i>, we now use the value
+(<i>A</i>&nbsp;&amp;&nbsp;HCAND)&nbsp;|&nbsp;HCOR. Also, any time the PC changes,
+its value is masked in the same way. In this situation, we say that the processor
+is in <i>user mode</i>.
+
+<p> Corollary: If HCAND is 0777777<sub>8</sub> and HCOR is zero, then the setting
+of HCON doesn't have any effect on the calculation of memory addresses. (However,
+it still affects whether the processor is considered to be in kernel mode for other
+purposes, such as the use of <a href="#OSEC">privileged instructions</a>.)
+
+<blockquote>
+<p> Example: Suppose HCON is 1, HCAND is 007007<sub>8</sub>, and HCOR is
+070540<sub>8</sub>. Then the only addresses accessible by the PC are of the form
+07X54X<sub>8</sub>, where X means "don't care". If &Delta;PC is (000,001) and PC
+is (076,547)<sub>8</sub>, then the next value of the PC will be (076,540)<sub>8</sub>.
+The PC is effectively restricted to an 8-by-8 sandbox, until it executes a <i>TRP</i>
+instruction.
+</blockquote>
+
+<blockquote>
+<p> Example: Suppose HCON is 1, HCAND is 100100<sub>8</sub>, and HCOR is 000000<sub>8</sub>.
+Suppose &Delta;PC is (0,1) (i.e., east). Then the instruction <tt>LV&nbsp;$1,777</tt>
+sets the PC to (100,100)<sub>8</sub>, and the next instruction executed will be fetched from
+(100,100)<sub>8</sub>, because the change due to &Delta;PC is masked away by HCAND.
+The next instruction is <i>not</i> fetched from (100,000)<sub>8</sub>, nor from
+(100,101)<sub>8</sub>.
+</blockquote>
+
+<h3 id="OSEC">Instruction-level security</h3>
+
+<p> The next built-in MSR provided by my Fungus virtual machine is OSEC
+(MSR&nbsp;#043<sub>8</sub>). OSEC provides a facility through which an operating
+system can ensure that user-mode programs don't perform any actions that threaten
+the security of the system. For example, it would probably be a bad idea to let
+user programs use the <i>SMR</i> instruction to change the value of HCAND!
+
+<p> MSR&nbsp;#043<sub>8</sub> is organized as a bit vector of 16&nbsp;bits; the
+top two bits of the <i>y</i> component (the <i>wo</i>) are ignored. Before
+executing any instruction <tt>I</tt>, if HCON is non-zero, the hardware computes
+the four-bit value <tt>((I.G << 3) | I.OP)</tt>, and uses it as an index into OSEC.
+If that bit of OSEC is set (i.e., non-zero), then the hardware takes an
+<a href="#IRET">asynchronous interrupt</a> to (777,777)<sub>8</sub>.
+
+<p> In this way, the operating system kernel can protect itself from malicious
+user-mode code with the following instruction sequence on boot:
+
+<blockquote><pre>
+    LV.Y $3, 0100    (* index 1111: LMR and SMR *)
+    LV.X $3, 0201    (* index 0111: RET; index 0000: TRP *)
+    SMR $3, #OSEC    (* disallow those three instructions in user mode *)
+</pre></blockquote>
+
+<p> User-mode code cannot write outside of its sandbox, and even if it writes an
+unsafe instruction such as <i>TRP</i> inside its sandbox in an attempt to break
+out, OSEC will catch the unsafe instruction and turn it into a harmless
+interrupt. (Of course, the operating system's handler for that interrupt
+had better be correct, or OSEC's vigilance will have been for naught.)
+
+<p> Notice that kernel mode is still allowed to use the "unsafe" instructions;
+otherwise, there would be no way at all to regain the full use of the processor,
+since <tt>SMR $X, #OSEC</tt> is one of the disallowed instructions!
+
+
+<h3 id="IRET">Asynchronous interrupts</h3>
+
+<p> For a computer to interact with the outside world, it needs some efficient way
+to accept input. For example, if the user presses a key on the keyboard, the processor
+needs to stop whatever it's doing and process that keystroke! One naive way to handle
+the problem is to poll the keyboard input device every few milliseconds, to see whether
+a key is being pressed; but polling is far too inefficient for real-world use.
+
+<p> Also, if we are to design a multi-processing operating system to run on Fungus,
+the system must have some way to switch between user processes &mdash; or to kill
+a malicious or runaway user process. To do that, the system needs to be able to
+wrest control from the current PC, without any special action on the PC's part.
+
+<p> To solve both of these problems, we introduce the notion of <i>asynchronous
+interrupts</i>. An asynchronous interrupt is a physical event (a keypress, say, or
+a timer tick) that <i>interrupts</i> the normal flow of control in the hardware,
+and sends the PC to an <i>interrupt handler</i>, in much the same way that a
+Fungus <i>TRP</i> instruction sends the PC to a <i>trap handler</i>.
+
+<p> Unlike traps, asynchronous interrupts can be called unexpectedly, at almost any
+time. Therefore, the usual trick of saving PC and &Delta;PC in $6 and $7 won't
+suffice; the program might be storing valuable information in $6 and $7 already,
+and wouldn't like the hardware to randomly overwrite those registers.
+
+<p> Therefore, the asynchronous interrupt system uses its own distinct mechanism
+to save and restore the values of the PC and all six other writable machine registers.
+The machine-specific registers ISTACK (#050<sub>8</sub>) and DISTK (#051<sub>8</sub>)
+are used for this purpose. When an asynchronous interrupt <i>foo</i> is taken,
+it is as if the following instructions have been executed:
+
+<blockquote><pre>
+    #ISTACK := #ISTACK + #DISTK
+    SW.V $1, [#ISTACK++]
+    SW.Y $2, [#ISTACK++]
+    SW.X $3, [#ISTACK++]
+    SW   $4, [#ISTACK]
+    SW.X $5, [#ISTACK--]
+    SW.Y $6, [#ISTACK--]
+    SW.V $7, [#ISTACK--]
+    LMR  $3, #ISTACK
+    TRP  #foo
+</pre></blockquote>
+
+Both ISTACK and DISTK are readable and writable.
+
+<p> The machine-specific register IRET (#052<sub>8</sub>) is write-only; reading
+from it returns the value zero. When a value <i>foo</i> is written to it,
+it is as if the following instructions have been executed:
+
+<blockquote><pre>
+    LW.V $1, [#ISTACK++]
+    LW.Y $2, [#ISTACK++]
+    LW.X $3, [#ISTACK++]
+    LW   $4, [#ISTACK]
+    LW.X $5, [#ISTACK--]
+    LW.Y $6, [#ISTACK--]
+    LW.V $7, [#ISTACK--]
+    #ISTACK := #ISTACK - #DISTK
+    HCON := foo
+</pre></blockquote>
+
+
+<h3 id="TICKS">Hardware cycle counter</h3>
+
+<p> The last built-in MSR provided by the Fungus virtual machine is TICKS
+(MSR&nbsp;#070<sub>8</sub>). TICKS is read-only; writing to it produces no effect.
+Reading TICKS with <i>LMR</i> returns the number of "clock cycles" since the first
+instruction. (Each Fungus instruction takes roughly 4&nbsp;clock cycles, as detailed
+in the spec. Jumps take a little longer, and traps take 8&nbsp;cycles.) 
+
+
+<h2 id="FungELF">The FungELF file format</h2>
+
+<p> The <tt>simfunge</tt> simulator can't run without a "program image" &mdash;
+something to put in memory so that the PC has something to execute. A memory
+full of zeros is just boring.
+
+<p> The program image is specified in a special kind of binary file, which
+contains not just the values of each cell in memory, but also a location for
+the PC to be at when the simulator starts running. This binary file is called
+an <i>ELF file</i>. The ELF format is a popular binary format used on most
+Unix and Linux platforms. <tt>simfunge</tt> deals with a particular kind of
+ELF file; clearly, you won't be able to run these ELF files on your home computer,
+because they contain Fungus instructions instead of x86 instructions!
+However, you should be able to use a tool such as GNU <tt>readelf</tt> to
+examine a FungELF file, if you find that sort of thing interesting. (On the
+other hand, GNU <tt>objdump</tt> is not that smart; it just complains "File format
+not recognized".)
+
+<p> The details of FungELF are not important. The only FungELF files you'll
+care about are the ones produced by <tt>fungasm</tt>, the Fungus assembler.
+It turns a plain-text, two-dimensional assembly file into a binary FungELF
+file, which can then be loaded back into memory and interpreted by
+<tt>simfunge</tt>.
+
+<p> Another way to create a FungELF file is to use the <tt>bef2elf</tt> utility
+to convert a plain-text Befunge file. The resulting binary will contain exactly
+the same information as the original text file, but with an ELF wrapper. It still
+won't run by itself on <tt>simfunge</tt>, because all the instructions in the
+file will be ASCII characters &mdash; <i>TRP</i> instructions.
+
+<h2 id="fungasm">The Fungus assembler</h2>
+
+<p> The Fungus assembler is called <tt>fungasm</tt>. It converts a plain-text
+file written in Fungus assembly language into a binary FungELF file containing
+Fungus machine code.
+
+<p> Fungus assembly language, just like Fungus machine code, is two-dimensional.
+It is written (mostly) in a grid, like this:
+
+<blockquote>
+<pre>
+  .FILL ' '
+  .MACRO NOP  LI.Y $0,777
+
+    .EQU OUTPUT 1      WORD 123456
+    GOE     LV 3,DATA  SW PC,[$3]     GOS       LW.S DPC, [5+6]
+    GON     NOP     (* this is        LMR $3, #OUTPUT
+    .ENTRY .-(0,2)  a comment *)                NOP
+    GOS  {comment}     SW.X $0, [++$PC]         .ORG (4,3)
+
+  WORD 0         .FILL 999d
+  .ORG (777,000)
+</pre>
+</blockquote>
+
+<p> An assembly file consists of a series of <i>sections</i>, separated
+by blank lines. Each section consists of a two-dimensional block of Fungus
+instruction mnemonics and assembler directives (<tt>.EQU</tt>, <tt>.ORG</tt>,
+and so on). Assembler directives take up space in the grid just as instructions
+do, and directives refer to their own positions in the text; thus, the
+<tt>.ORG&nbsp;(4,3)</tt> directive in the above example indicates that its
+own space in the grid should be located at (004,003)<sub>8</sub> &mdash; and
+therefore that the <tt>GOE</tt> instruction in the upper left corner will be
+located at (0,0).
+
+<p> If any section contains no origin &mdash; that is, if it consists
+entirely of assembler directives, and none of those directives is <tt>.ORG</tt>
+&mdash; then those directives are taken as global to the entire program. The
+first section in the program above is a global section, and it defines the
+<i>global fill</i> for the program (<tt>e_flags</tt> in the ELF header), as
+well as a global <i>macro</i> called <tt>NOP</tt>. The last section in the
+above program contains an <tt>.ORG</tt> directive, so its <tt>.FILL</tt> directive
+is taken as local (<tt>p_flags</tt> in the section header), not global. (But
+since the section is only 1x1 anyway, nothing ends up getting filled with
+999<sub>10</sub> anyway.)
+
+<p> Macros defined in non-global sections are taken as local to those sections,
+and are not visible in other sections. <tt>.EQU</tt> symbols are always visible
+globally, and their value is the same everywhere.
+
+<p> <i>Comments</i> in Fungus assembly follow the Pascal convention; they are
+bracketed by <tt>(* *)</tt> or curly braces <tt>{ }</tt>. In the spirit of Funge,
+multi-line "block" comments are allowed; the assembler will treat two spaces in
+a comment as a "break" to the next line, and then treat any text under the previous
+line's comment text as part of the same comment. Comments, unlike instructions and
+directives, do not need to be lined up on the grid. Every comment must still have
+one opening delimiter and one closing delimiter, and they must match; it is
+incorrect to write
+
+<blockquote>
+<pre>
+    SMR $0, #2 {a trivial program}            (* This comment is
+    .ENTRY .-(0,1)                         invalid because it splits
+         (* But this comment is         into two *)              pieces *)
+      fine because         it comes
+        back together at the end *)
+     
+</pre>
+</blockquote>
+
+<p> The assembler proceeds as follows when processing a file:
+
+<ol>
+  <li> For each section: </li>
+  <ol>
+    <li> Remove all comments, using an algorithm similar to,
+         but simpler than, union-find. </li>
+    <li> Determine the grid. Every non-blank character in the input 
+         should now be classified as part of exactly one "string", and 
+         each string should be associated with exactly one unique offset 
+         (<i>x</i>,<i>y</i>) from the upper left corner of the section 
+         definition. </li>
+    <li> Process and get rid of all assembler directives. Verify that 
+         all <tt>.ORG</tt> and <tt>.FILL</tt> directives in the section 
+         are consistent with one another. <tt>.EQU</tt> and 
+         <tt>.MACRO</tt> directives are processed by adding their 
+         defined symbols to lists that will be used later to resolve 
+         symbol references. </li>
+    <li> If the section is a global section, transfer its 
+         <tt>.MACRO</tt> directives to a global list, and verify that 
+         its <tt>.FILL</tt>, <tt>.MACRO</tt>, and <tt>.ENTRY</tt> 
+         directives do not contradict the current global settings. </li>
+  </ol>
+  <li> Resolve each <tt>.EQU</tt> directive in each section-local list and the
+       global list, resulting in a single value. If any directive cannot be
+       resolved &mdash; because it refers to an undefined symbol, or is
+       mutually recursive with another directive &mdash; then mark it "unusable".
+       The assembler does not give warnings about unusable symbols, unless they
+       are actually used. See below for the details of the resolution process.</li> 
+  <li> Now, for each instruction in each section: </li>
+  <ol>
+    <li> Perform macro replacement, replacing each macro in the string
+         with its replacement text. A local macro will "hide" any global 
+         macro of the same name. Macro expansion proceeds iteratively 
+         until no further expansion is possible. Mutually recursive
+         macros can be detected during expansion; the assembler
+         treats mutually recursive macros as unusable symbols. </li>
+    <li> Perform symbol replacement, replacing each <tt>.EQU</tt> symbol
+         with its value. </li>
+    <li> At this point, the instruction will consist entirely of 
+         predefined mnemonics, literal constants, and arithmetic 
+         operators. It can be parsed and dumped to the object file. 
+         </li>
+  </ol>
+</ol>
+
+<p> For examples of Fungus assembly language, see the <a 
+href="src/asmdemos">asmdemos/</a> directory. One program that 
+exercises most of the features of <tt>fungasm</tt> is <a 
+href="src/asmdemos/kernel.asm">kernel.asm</a> 
+<small>[text, 22K]</small>, a ROM kernel for Befunge-93.
+
+<h3 id="kernel">The Befunge-93 kernel</h3>
+
+One of the sample programs provided in the <a 
+href="src/asmdemos">asmdemos/</a> directory is <a
+href="src/asmdemos/kernel.asm">kernel.asm</a>
+<small>[text, 22K]</small>, a Befunge-93 "kernel" for Fungus.
+Running the simulator with the parameters
+<blockquote><pre>
+  simfunge kernel.elf hello.b93
+</pre></blockquote>
+(where "hello.b93" is any Befunge-93 program) will produce the same
+effect as executing "hello.b93" in your Befunge-93 interpreter of
+choice.
+
+<p> As explained in the <a href="#Intro">introduction</a>, the kernel
+works by loading into low memory a set of trap handlers, each of which
+implements the Befunge-93 instruction corresponding to its ASCII value.
+The kernel is responsible for maintaining the Befunge <i>stack</i>;
+doing non-trivial arithmetic such as multiplication and division; and
+inputting and outputting data. (For the input and output of individual
+ASCII characters, the kernel must depend on the kindness of the virtual
+machine. The kernel assumes that reading from MSR&nbsp;#00 will read a
+character from <tt>stdin</tt>, and writing to MSR&nbsp;#01 will write
+to <tt>stdout</tt>, as described in the section on <a href="#INPUT">I/O</a>
+above. However, the kernel is responsible for algorithmically converting 
+the sequence of ASCII characters "1","2","3" into the number 
+123<sub>10</sub>, and vice versa.)
+
+<p> I believe that "kernel.asm" implements all of Befunge-93 according
+to the specification, with the following exceptions (which may be fixed
+sometime in the future):
+
+<ol>
+  <li> Because the hardware context in which the Befunge IP runs is
+actually 128&times;64 instead of 80&times;25, jumps ("<tt>#</tt>") east
+from column&nbsp;79, north from row&nbsp;0, et cetera, don't skip the 
+instruction on the other side of the wrap. This is not a big deal, 
+since some other interpreters also handle edge jumps this way. (However,
+strings do wrap at the edges as if Befunge-space were 80&times;25.)</li>
+  <li> Arithmetic is done modulo&nbsp;2<sup>18</sup> signed, which
+does conform to the spec, but is not a usual choice. (Usual choices
+are mod&nbsp;2<sup>8</sup> signed or unsigned, or
+mod&nbsp;2<sup>32</sup> signed.) </li>
+  <li> The <a href="docs/spec98.html">Funge-98 spec</a> says that in 
+Befunge-93, if the program divides by zero, it should ask the user what 
+he wants the result to be. I don't think any interpreters actually do 
+that, though. "kernel.asm" simply makes <tt>x/0 = 0</tt>, <tt>x%0 = x</tt>
+(thus preserving the equality <tt>(x/y)*y + (x%y) = x</tt>). </li>
+</ol>
 
 </body>
 </html>
